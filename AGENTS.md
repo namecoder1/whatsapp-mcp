@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Personal, security-hardened fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp). It connects a personal WhatsApp account to Claude through an MCP server. Upstream is unmaintained; changes here are not meant to go back upstream.
+Personal, security-hardened fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp). It connects a personal WhatsApp account to Claude, Codex or any other MCP client through an MCP server. Upstream is unmaintained; changes here are not meant to go back upstream.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ Two processes that share `whatsapp-bridge/store/`:
   - `lifecycle.go`: `/api/status`, idle timeout and exit-with-parent for on-demand starts, no-pairing mode, exit codes.
   - `lock_*.go`: exclusive lock on `store/bridge.lock`, so only one bridge uses the session.
   - `umask_*.go`: user-only file permissions.
-- **`whatsapp-mcp-server/`** (Python, FastMCP, run with `uv`): a stdio MCP server started by Claude Code. It **reads `messages.db` directly** via SQLite and **calls the bridge REST API** to send messages and download media.
+- **`whatsapp-mcp-server/`** (Python, FastMCP, run with `uv`): a stdio MCP server started by the MCP client (Claude Code, Codex, ...). Keep it client-agnostic: plain stdio MCP, no client-specific features. It **reads `messages.db` directly** via SQLite and **calls the bridge REST API** to send messages and download media.
   - `main.py`: tool definitions, all wrapped with `@tool` so the bridge is started on demand. Send tools are registered only with `WHATSAPP_ALLOW_SEND=1`.
   - `bridge.py`: on-demand bridge start. It builds `whatsapp-bridge/bin/whatsapp-bridge` if stale, spawns it with `WHATSAPP_NO_PAIRING=1`, `WHATSAPP_EXIT_WITH_PARENT=1` and a 15m idle timeout, logs to `store/bridge.log`, and stops it on exit. `call()` is the only way to reach the bridge API. Read-only tools also start the bridge on purpose, so they see messages that arrived while it was off. Bridge exit codes: 3 restricted, 4 not paired, 5 already running.
   - `whatsapp.py`: SQLite queries and bridge calls (`_post` goes through `bridge.call`, `_outbox_path` checks paths).

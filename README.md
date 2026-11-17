@@ -1,8 +1,8 @@
 # WhatsApp MCP (hardened)
 
-**Read and search your WhatsApp messages from Claude, locally, with sending off by default.**
+**Read and search your WhatsApp messages from Claude or Codex, locally, with sending off by default.**
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that links your personal WhatsApp account as a companion device (like WhatsApp Web) and exposes your chats to an MCP client such as Claude Code, Claude Desktop or Cursor. Messages are stored in a local SQLite database and only reach the model when a tool call reads them.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that links your personal WhatsApp account as a companion device (like WhatsApp Web) and exposes your chats to an MCP client such as Claude Code, Claude Desktop, OpenAI Codex or Cursor. Messages are stored in a local SQLite database and only reach the model when a tool call reads them.
 
 This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp), which is no longer maintained. It keeps the original design (Go bridge + Python MCP server) and fixes its main weaknesses. See [What changed from upstream](#what-changed-from-upstream).
 
@@ -43,13 +43,39 @@ go run .
 
 Scan the QR code from WhatsApp on your phone: *Settings → Linked devices → Link a device*. Wait until the initial history sync finishes, then stop the bridge with `Ctrl+C`. This is the only step that needs a terminal.
 
+Optionally build the bridge binary now, so the first tool call does not have to compile it (the MCP server rebuilds it by itself when the sources change):
+
+```bash
+go build -o bin/whatsapp-bridge .
+```
+
 **2. Add the MCP server**
+
+Run these from `whatsapp-bridge/`, or replace `$PWD/..` with the absolute path of the repository.
 
 Claude Code:
 
 ```bash
 claude mcp add whatsapp --scope user -- "$(which uv)" --directory "$PWD/../whatsapp-mcp-server" run main.py
 ```
+
+OpenAI Codex (CLI, IDE extension and app share `~/.codex/config.toml`):
+
+```bash
+codex mcp add whatsapp -- "$(which uv)" --directory "$PWD/../whatsapp-mcp-server" run main.py
+```
+
+Or edit `~/.codex/config.toml` directly. The longer timeouts leave room for the first start, when `uv` installs the dependencies and the bridge may need to be built and connected:
+
+```toml
+[mcp_servers.whatsapp]
+command = "/path/to/uv"
+args = ["--directory", "/path/to/whatsapp-mcp-hardened/whatsapp-mcp-server", "run", "main.py"]
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+```
+
+Check it with `codex mcp list`, or `/mcp` inside a Codex session.
 
 Claude Desktop or Cursor (`claude_desktop_config.json` / `~/.cursor/mcp.json`):
 
@@ -63,6 +89,8 @@ Claude Desktop or Cursor (`claude_desktop_config.json` / `~/.cursor/mcp.json`):
   }
 }
 ```
+
+Use absolute paths everywhere (`which uv` prints the one for `uv`): MCP clients do not start servers from your shell, so `~` and your shell `PATH` are not available.
 
 **3. Restart your client.** The first WhatsApp tool call starts the bridge automatically. It stops again after 15 minutes without requests, or when the session ends.
 
@@ -89,8 +117,14 @@ Sending tools (only registered when `WHATSAPP_ALLOW_SEND=1`): `send_message`, `s
 Sending is a separate, deliberate step. Enable it by adding the variable to your MCP config:
 
 ```bash
+# Claude Code
 claude mcp add whatsapp --scope user -e WHATSAPP_ALLOW_SEND=1 -- "$(which uv)" --directory /path/to/whatsapp-mcp-server run main.py
+
+# Codex
+codex mcp add whatsapp --env WHATSAPP_ALLOW_SEND=1 -- "$(which uv)" --directory /path/to/whatsapp-mcp-server run main.py
 ```
+
+In `~/.codex/config.toml` the same setting is `env = { WHATSAPP_ALLOW_SEND = "1" }` under `[mcp_servers.whatsapp]`.
 
 Even when enabled, the bridge enforces these limits regardless of what the model asks for:
 
@@ -104,7 +138,7 @@ These limits reduce the risk of a ban and of an injected message going out. They
 
 ## Configuration
 
-All settings are environment variables. Set them in the `env` of your MCP config or with `-e` in `claude mcp add`.
+All settings are environment variables. Set them in the `env` of your MCP config, with `-e` in `claude mcp add` or with `--env` in `codex mcp add`.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
@@ -142,6 +176,7 @@ The invariants these rely on are written down in [AGENTS.md](./AGENTS.md).
 - **A tool returns nothing.** Check `whatsapp-bridge/store/bridge.log`. If the bridge says it is not paired, run `go run .` in `whatsapp-bridge/` and scan the QR code again.
 - **Sessions expire.** Linked devices are logged out after roughly two weeks if your phone stays offline. Pair again.
 - **"Account restricted" / the bridge will not start.** WhatsApp restricted the account. Read the reason in `bridge.log`, wait it out, then delete `store/ACCOUNT_RESTRICTED` yourself.
+- **Codex: the server times out at startup or on the first call.** Raise `startup_timeout_sec` and `tool_timeout_sec` in `~/.codex/config.toml` (see [Quick start](#quick-start)), or build the bridge ahead of time with `go build -o bin/whatsapp-bridge .` in `whatsapp-bridge/`.
 - **No messages after pairing.** The first history sync can take several minutes on large accounts.
 - **Out of sync.** Stop the bridge, delete `store/messages.db` and `store/whatsapp.db`, and pair again.
 - **Device limit reached.** Remove a linked device on your phone first.

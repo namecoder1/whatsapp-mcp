@@ -161,7 +161,7 @@ def ensure_running():
         return
 
     os.makedirs(STORE_DIR, mode=0o700, exist_ok=True)
-    # Serialize starts between Claude sessions, so only one of them spawns a bridge
+    # Serialize starts between MCP client sessions, so only one of them spawns a bridge
     with open(os.path.join(STORE_DIR, 'autostart.lock'), 'w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         status = _status()
@@ -186,6 +186,13 @@ def _stop():
             _process.kill()
 
 
+def _on_sigterm(*_):
+    # sys.exit() is not enough here: the event loop would wait forever for the thread blocked
+    # reading stdin, so stop the bridge and exit right away
+    _stop()
+    os._exit(0)
+
+
 atexit.register(_stop)
-# Make SIGTERM run atexit handlers too; the bridge also exits by itself if this process dies
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+# The bridge also exits by itself if this process dies
+signal.signal(signal.SIGTERM, _on_sigterm)

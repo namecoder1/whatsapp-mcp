@@ -45,7 +45,7 @@ func statusHandler(client *whatsmeow.Client) http.HandlerFunc {
 }
 
 // Stop the bridge after WHATSAPP_IDLE_TIMEOUT without API requests, and when the process that started it
-// exits (WHATSAPP_EXIT_WITH_PARENT=1), so an on-demand bridge never outlives the Claude session
+// exits (WHATSAPP_EXIT_WITH_PARENT=1), so an on-demand bridge never outlives the MCP client session
 func watchLifetime(stop chan<- string) error {
 	var idle time.Duration
 	if v := os.Getenv("WHATSAPP_IDLE_TIMEOUT"); v != "" {
