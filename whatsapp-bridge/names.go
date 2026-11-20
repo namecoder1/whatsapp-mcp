@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"strings"
-	"unicode"
-
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -47,20 +44,7 @@ const selfChosenPrefix = "~"
 
 // Strip control characters and newlines and cap the length, since names end up in the LLM context
 func cleanName(name string) string {
-	name = strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return ' '
-		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) && r != '‍' {
-			return -1
-		}
-		return r
-	}, name)
-	name = strings.TrimSpace(strings.Join(strings.Fields(name), " "))
-	if runes := []rune(name); len(runes) > 60 {
-		name = string(runes[:60])
-	}
-	return name
+	return cleanText(name, 60)
 }
 
 // Recompute every direct chat name from the current address book. Stored names are never trusted, so names

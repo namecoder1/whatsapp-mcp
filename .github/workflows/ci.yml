@@ -34,4 +34,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: Server imports and exposes the read-only tools
-        run: uv run python -c "import main, asyncio; names=[t.name for t in asyncio.run(main.mcp.list_tools())]; print(names); assert 'list_chats' in names and 'send_message' not in names"
+        run: uv run python -c "import main, asyncio; names=[t.name for t in asyncio.run(main.mcp.list_tools())]; print(names); assert 'list_chats' in names and 'inspect_media' in names and 'send_message' not in names"
+      - name: Unit tests
+        run: uv run python -m unittest -v

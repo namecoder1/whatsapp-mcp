@@ -11,7 +11,7 @@ Include what you found, how to reproduce it, and what an attacker gains. You can
 In scope:
 
 - The Go bridge (`whatsapp-bridge/`): the Unix socket API, authentication, path handling, send limits.
-- The Python MCP server (`whatsapp-mcp-server/`): tool inputs, SQL queries, bridge calls.
+- The Python MCP server (`whatsapp-mcp-server/`): tool inputs, SQL queries, bridge calls, and how `inspect_media` handles received files (paths, size limits, parser isolation).
 - Anything that lets untrusted content (a WhatsApp message, file name, contact name) cause an action the user did not approve, such as sending a message, reading a file outside the outbox, or reaching the API without the token.
 
 Out of scope:

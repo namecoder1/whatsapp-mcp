@@ -24,6 +24,7 @@ This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lh
 
 - Search contacts and list chats with their last message
 - Read messages with filters, pagination and surrounding context
+- Let the model see photos, read documents and listen to voice notes, one attachment at a time and only when it needs to (see [Media](#media-photos-voice-notes-video-documents))
 - Download images, videos, documents and voice notes on demand
 - Everything stored locally; no third-party server in the path
 - Optional, rate-limited sending of text, files and voice messages
@@ -31,7 +32,7 @@ This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lh
 
 ## Quick start
 
-You need [Go](https://go.dev/dl/) (the version in `whatsapp-bridge/go.mod`), [uv](https://docs.astral.sh/uv/) and Python 3.11+. [FFmpeg](https://ffmpeg.org) is optional and only needed to send voice messages. Tested on macOS; Linux should work; Windows is untested.
+You need [Go](https://go.dev/dl/) (the version in `whatsapp-bridge/go.mod`), [uv](https://docs.astral.sh/uv/) and Python 3.11+. Optional: [FFmpeg](https://ffmpeg.org) (images, video, voice notes), [poppler](https://poppler.freedesktop.org) (PDFs) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (voice note transcripts), see [Media](#media-photos-voice-notes-video-documents). Tested on macOS; Linux should work; Windows is untested.
 
 **1. Clone and link your phone (once)**
 
@@ -108,9 +109,49 @@ Read-only tools (always available):
 | `get_last_interaction` | Most recent message with a contact |
 | `list_messages` | Messages with filters, pagination and context |
 | `get_message_context` | Messages around a specific message |
+| `inspect_media` | See an image, read a document, or get a transcript of a voice note or video, for one message |
 | `download_media` | Download media from a message to local disk |
 
 Sending tools (only registered when `WHATSAPP_ALLOW_SEND=1`): `send_message`, `send_file`, `send_audio_message`.
+
+## Media: photos, voice notes, video, documents
+
+Message listings never include media content. Each attachment is shown as a one-line summary, followed by its caption:
+
+```
+[voice message 0:42 18.2 KB - Message ID: 3A2E... - Chat JID: ...]
+[document "contract.pdf" 14 pages application/pdf 1.2 MB - Message ID: ...] Here is the draft
+[image 1280x960 168.7 KB - Message ID: ...] look at this
+see this https://example.com [link preview: https://example.com — "Example Domain": ...]
+```
+
+The model reads the summary, the caption and the messages around it, and calls `inspect_media` only for the attachment it actually needs. Because it is a separate tool call, your MCP client asks for your permission first (unless you allowed the tool permanently), so in a chat full of photos nothing is opened that is not relevant to your question.
+
+What `inspect_media` returns:
+
+| Attachment | Result | `detail="high"` |
+| --- | --- | --- |
+| Image, sticker | The picture, shrunk to 768px | 1568px, to read small text |
+| Voice message, audio | A transcript, made locally with whisper.cpp | (same) |
+| Video | One contact sheet of 4 frames, plus a transcript of the audio | 9 larger frames |
+| Document | The text of PDF, `.docx`, `.pptx` and plain text files, a few pages per call (`pages="6-10"` to continue). Scanned PDFs are shown as page images | More text per call |
+
+Everything runs on your computer: no file is sent to a transcription or OCR service. Transcripts and document text are cached in `store/media_cache.db`, so a second question about the same voice note costs nothing. Link previews are the ones WhatsApp attached to the message; links are never fetched by the server.
+
+**Setup** (macOS with Homebrew; use your package manager elsewhere):
+
+```bash
+brew install ffmpeg poppler whisper-cpp
+
+# A whisper.cpp model (~550 MB, good with Italian, English and most languages)
+mkdir -p ~/.cache/whisper-cpp
+curl -L -o ~/.cache/whisper-cpp/ggml-large-v3-turbo-q5_0.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+```
+
+Each part is optional: without whisper.cpp, images and documents still work, and the tool says what is missing. Models in `~/.cache/whisper-cpp/` are found automatically (the most accurate one wins); set `WHATSAPP_WHISPER_MODEL` to use another file. Smaller models (`ggml-base.bin`, `ggml-small.bin`) are faster but much less accurate outside English.
+
+Captions, durations, sizes and link previews are recorded by the bridge for messages received from this version on. Older messages show only the media type and size.
 
 ## Sending messages (opt-in)
 
@@ -149,6 +190,10 @@ All settings are environment variables. Set them in the `env` of your MCP config
 | `WHATSAPP_OUTBOX_DIR` | `~/WhatsApp-outbox` | The only folder files can be sent from |
 | `WHATSAPP_AUTOSTART` | on | Set to `0` to start and stop the bridge yourself |
 | `WHATSAPP_IDLE_TIMEOUT` | `15m` | Stop the bridge after this long without requests (`0` disables) |
+| `WHATSAPP_MEDIA_MAX_MB` | `100` | `inspect_media` refuses larger attachments |
+| `WHATSAPP_WHISPER_MODEL` | auto | Path of the whisper.cpp model (`ggml-*.bin`) used for transcripts |
+| `WHATSAPP_WHISPER_LANGUAGE` | `auto` | Language of voice notes (`it`, `en`...), if auto-detection gets it wrong |
+| `WHATSAPP_TRANSCRIBE_MAX_MINUTES` | `10` | Only the first part of longer recordings is transcribed |
 
 ## What changed from upstream
 
@@ -161,14 +206,16 @@ The original project exposed a local HTTP API with no authentication and read an
 - **Untrusted names are sanitized.** File names, chat IDs and contact names from WhatsApp are cleaned before use in paths or display. Names chosen by the other person are marked with a `~` so they are not mistaken for saved contacts. SQL is parameterized.
 - **Private storage.** Everything in `store/` is created with user-only permissions and is git-ignored.
 - **On-demand bridge** with a lock that stops two bridges from sharing one session.
+- **Media is processed locally and treated as hostile.** Parsers (ffmpeg, poppler, whisper.cpp) run as separate processes with timeouts and no network access, sizes are capped, and every result is labelled as untrusted content for the model.
+- **Media downloads work again.** Upstream stripped the signed query string from media paths, so downloads failed with HTTP 403.
 - **Logs go to stderr** (stdout is the MCP channel) and `whatsmeow` is updated to a current version.
 
 The invariants these rely on are written down in [AGENTS.md](./AGENTS.md).
 
 ## Privacy and data
 
-- Messages, the session, downloaded media and the API token live in `whatsapp-bridge/store/`. Treat that folder like a password: whoever can read it can read your chats and use your linked session.
-- Nothing is uploaded anywhere by this project. Data reaches a model only when a tool returns it, and then it is subject to your MCP client's and model provider's policies.
+- Messages, the session, downloaded media, the media cache (transcripts and document text) and the API token live in `whatsapp-bridge/store/`. Treat that folder like a password: whoever can read it can read your chats and use your linked session.
+- Nothing is uploaded anywhere by this project. Transcription, document reading and image resizing run on your computer. Data reaches a model only when a tool returns it, and then it is subject to your MCP client's and model provider's policies.
 - To remove everything: unlink the device in WhatsApp (*Settings → Linked devices*) and delete `whatsapp-bridge/store/`.
 
 ## Troubleshooting
@@ -177,6 +224,8 @@ The invariants these rely on are written down in [AGENTS.md](./AGENTS.md).
 - **Sessions expire.** Linked devices are logged out after roughly two weeks if your phone stays offline. Pair again.
 - **"Account restricted" / the bridge will not start.** WhatsApp restricted the account. Read the reason in `bridge.log`, wait it out, then delete `store/ACCOUNT_RESTRICTED` yourself.
 - **Codex: the server times out at startup or on the first call.** Raise `startup_timeout_sec` and `tool_timeout_sec` in `~/.codex/config.toml` (see [Quick start](#quick-start)), or build the bridge ahead of time with `go build -o bin/whatsapp-bridge .` in `whatsapp-bridge/`.
+- **`inspect_media` fails with HTTP 403/404/410.** WhatsApp deletes media from its servers after a while; old attachments can only be opened if they were downloaded before.
+- **Wrong language in transcripts.** Set `WHATSAPP_WHISPER_LANGUAGE` (for example `it`), or use a larger model.
 - **No messages after pairing.** The first history sync can take several minutes on large accounts.
 - **Out of sync.** Stop the bridge, delete `store/messages.db` and `store/whatsapp.db`, and pair again.
 - **Device limit reached.** Remove a linked device on your phone first.

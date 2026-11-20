@@ -18,6 +18,7 @@ go vet ./... && go test ./...
 
 # MCP server (Python, managed with uv)
 cd whatsapp-mcp-server
+uv run python -m unittest
 uv run python -c "import main, asyncio; print([t.name for t in asyncio.run(main.mcp.list_tools())])"
 ```
 

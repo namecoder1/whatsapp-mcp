@@ -55,6 +55,7 @@ class Message:
     id: str
     chat_name: Optional[str] = None
     media_type: Optional[str] = None
+    media: Optional[dict] = None
 
 @dataclass
 class Chat:
@@ -81,6 +82,110 @@ class MessageContext:
     message: Message
     before: List[Message]
     after: List[Message]
+
+# Media metadata and link preview columns, added by newer bridges (media.go)
+MEDIA_COLUMNS = ["filename", "file_length", "mimetype", "media_seconds", "media_width", "media_height",
+                 "media_pages", "media_voice", "link_url", "link_title", "link_description"]
+_present_columns = None
+
+def _message_select(cursor) -> str:
+    """Columns for _row_to_message. Columns an older bridge has not created yet read as NULL."""
+    global _present_columns
+    if _present_columns is None or not _present_columns.issuperset(MEDIA_COLUMNS):
+        _present_columns = {row[1] for row in cursor.execute("PRAGMA table_info(messages)")}
+    media = [f"messages.{c}" if c in _present_columns else "NULL" for c in MEDIA_COLUMNS]
+    return ", ".join(["messages.timestamp", "messages.sender", "chats.name", "messages.content", "messages.is_from_me",
+                      "chats.jid", "messages.id", "messages.media_type"] + media)
+
+def _row_to_message(row) -> Message:
+    media = dict(zip(MEDIA_COLUMNS, row[8:8 + len(MEDIA_COLUMNS)]))
+    return Message(
+        timestamp=datetime.fromisoformat(row[0]),
+        sender=row[1],
+        chat_name=row[2],
+        content=row[3],
+        is_from_me=row[4],
+        chat_jid=row[5],
+        id=row[6],
+        media_type=row[7],
+        media=media,
+    )
+
+def _size(n: Optional[int]) -> str:
+    if not n:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+def _clean(text: Optional[str], limit: int) -> str:
+    """Untrusted short text for a one-line summary: no control characters or newlines, capped."""
+    text = "".join(" " if ch.isspace() else ch for ch in (text or "") if ch.isprintable() or ch.isspace())
+    text = " ".join(text.split())
+    return text[:limit] + "…" if len(text) > limit else text
+
+def describe_media(media_type: str, media: Optional[dict]) -> str:
+    """One-line summary of an attachment, enough to decide whether to open it with inspect_media."""
+    m = media or {}
+    parts = []
+    if media_type == "audio":
+        parts.append("voice message" if m.get("media_voice") else "audio")
+    else:
+        parts.append(media_type)
+    if media_type == "document" and m.get("filename"):
+        parts.append(f'"{_clean(m["filename"], 80)}"')
+    if m.get("media_seconds"):
+        s = int(m["media_seconds"])
+        parts.append(f"{s // 60}:{s % 60:02d}")
+    if m.get("media_width") and m.get("media_height") and media_type in ("image", "video"):
+        parts.append(f'{m["media_width"]}x{m["media_height"]}')
+    if m.get("media_pages"):
+        parts.append(f'{m["media_pages"]} pages')
+    if media_type == "document" and m.get("mimetype"):
+        parts.append(_clean(m["mimetype"].split(";")[0], 60))
+    if m.get("file_length"):
+        parts.append(_size(m["file_length"]))
+    return " ".join(parts)
+
+def describe_link(media: Optional[dict]) -> str:
+    m = media or {}
+    if not m.get("link_url") and not m.get("link_title"):
+        return ""
+    out = f"[link preview: {_clean(m.get('link_url'), 200)}"
+    if m.get("link_title"):
+        out += f' — "{_clean(m["link_title"], 120)}"'
+    if m.get("link_description"):
+        out += f": {_clean(m['link_description'], 200)}"
+    return out + "]"
+
+def get_media_info(message_id: str, chat_jid: str) -> dict:
+    """Metadata of the media in a message, or raise ValueError if there is none."""
+    conn = sqlite3.connect(MESSAGES_DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT {_message_select(cursor)}
+            FROM messages JOIN chats ON messages.chat_jid = chats.jid
+            WHERE messages.id = ? AND messages.chat_jid = ?
+        """, (message_id, chat_jid))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        raise ValueError(f"Message {message_id} not found in chat {chat_jid}")
+    message = _row_to_message(row)
+    if not message.media_type:
+        raise ValueError(f"Message {message_id} has no media")
+    m = message.media
+    return {
+        "media_type": message.media_type,
+        "filename": m.get("filename"),
+        "mimetype": m.get("mimetype"),
+        "file_length": m.get("file_length"),
+        "voice": bool(m.get("media_voice")),
+        "summary": describe_media(message.media_type, m),
+    }
 
 def get_sender_name(sender_jid: str) -> str:
     try:
@@ -136,12 +241,13 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
         output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] "
         
     content_prefix = ""
-    if hasattr(message, 'media_type') and message.media_type:
-        content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
-    
+    if message.media_type:
+        content_prefix = f"[{describe_media(message.media_type, message.media)} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
+    link = describe_link(message.media)
+
     try:
         sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
-        output += f"From: {sender_name}: {content_prefix}{message.content}\n"
+        output += f"From: {sender_name}: {content_prefix}{message.content}{' ' + link if link else ''}\n"
     except Exception as e:
         log(f"Error formatting message: {e}")
     return output
@@ -174,7 +280,7 @@ def list_messages(
         cursor = conn.cursor()
         
         # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
+        query_parts = [f"SELECT {_message_select(cursor)} FROM messages"]
         query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
@@ -222,19 +328,7 @@ def list_messages(
         cursor.execute(" ".join(query_parts), tuple(params))
         messages = cursor.fetchall()
         
-        result = []
-        for msg in messages:
-            message = Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            )
-            result.append(message)
+        result = [_row_to_message(msg) for msg in messages]
             
         if include_context and result:
             # Add context for each message
@@ -269,8 +363,9 @@ def get_message_context(
         cursor = conn.cursor()
         
         # Get the target message first
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
+        columns = _message_select(cursor)
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.id = ?
@@ -280,62 +375,29 @@ def get_message_context(
         if not msg_data:
             raise ValueError(f"Message with ID {message_id} not found")
             
-        target_message = Message(
-            timestamp=datetime.fromisoformat(msg_data[0]),
-            sender=msg_data[1],
-            chat_name=msg_data[2],
-            content=msg_data[3],
-            is_from_me=msg_data[4],
-            chat_jid=msg_data[5],
-            id=msg_data[6],
-            media_type=msg_data[8]
-        )
+        target_message = _row_to_message(msg_data)
         
         # Get messages before
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
             ORDER BY messages.timestamp DESC
             LIMIT ?
-        """, (msg_data[7], msg_data[0], before))
-        
-        before_messages = []
-        for msg in cursor.fetchall():
-            before_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
+        """, (target_message.chat_jid, msg_data[0], before))
+        before_messages = [_row_to_message(msg) for msg in cursor.fetchall()]
         
         # Get messages after
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
             ORDER BY messages.timestamp ASC
             LIMIT ?
-        """, (msg_data[7], msg_data[0], after))
-        
-        after_messages = []
-        for msg in cursor.fetchall():
-            after_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
+        """, (target_message.chat_jid, msg_data[0], after))
+        after_messages = [_row_to_message(msg) for msg in cursor.fetchall()]
         
         return MessageContext(
             message=target_message,
@@ -524,20 +586,12 @@ def get_last_interaction(jid: str) -> str:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
-        cursor.execute("""
-            SELECT 
-                m.timestamp,
-                m.sender,
-                c.name,
-                m.content,
-                m.is_from_me,
-                c.jid,
-                m.id,
-                m.media_type
-            FROM messages m
-            JOIN chats c ON m.chat_jid = c.jid
-            WHERE m.sender = ? OR c.jid = ?
-            ORDER BY m.timestamp DESC
+        cursor.execute(f"""
+            SELECT {_message_select(cursor)}
+            FROM messages
+            JOIN chats ON messages.chat_jid = chats.jid
+            WHERE messages.sender = ? OR chats.jid = ?
+            ORDER BY messages.timestamp DESC
             LIMIT 1
         """, (jid, jid))
         
@@ -546,18 +600,7 @@ def get_last_interaction(jid: str) -> str:
         if not msg_data:
             return None
             
-        message = Message(
-            timestamp=datetime.fromisoformat(msg_data[0]),
-            sender=msg_data[1],
-            chat_name=msg_data[2],
-            content=msg_data[3],
-            is_from_me=msg_data[4],
-            chat_jid=msg_data[5],
-            id=msg_data[6],
-            media_type=msg_data[7]
-        )
-        
-        return format_message(message)
+        return format_message(_row_to_message(msg_data))
         
     except sqlite3.Error as e:
         log(f"Database error: {e}")
@@ -770,44 +813,26 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def download_media(message_id: str, chat_jid: str) -> Optional[str]:
-    """Download media from a message and return the local file path.
-    
-    Args:
-        message_id: The ID of the message containing the media
-        chat_jid: The JID of the chat containing the message
-    
-    Returns:
-        The local file path if download was successful, None otherwise
-    """
+def fetch_media(message_id: str, chat_jid: str) -> str:
+    """Have the bridge download (or reuse) the media of a message. Returns the local path or raises ValueError."""
     try:
-        url = "download"
-        payload = {
-            "message_id": message_id,
-            "chat_jid": chat_jid
-        }
-        
-        response = _post(url, payload)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success", False):
-                path = result.get("path")
-                log(f"Media downloaded successfully: {path}")
-                return path
-            else:
-                log(f"Download failed: {result.get('message', 'Unknown error')}")
-                return None
-        else:
-            log(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-            
+        response = _post("download", {"message_id": message_id, "chat_jid": chat_jid})
     except requests.RequestException as e:
-        log(f"Request error: {str(e)}")
-        return None
+        raise ValueError(str(e))
+    try:
+        result = response.json()
     except json.JSONDecodeError:
-        log(f"Error parsing response: {response.text}")
-        return None
-    except Exception as e:
-        log(f"Unexpected error: {str(e)}")
+        raise ValueError(f"Download failed: HTTP {response.status_code} - {response.text[:300]}")
+    if response.status_code != 200 or not result.get("success") or not result.get("path"):
+        raise ValueError(result.get("message") or f"Download failed: HTTP {response.status_code}")
+    return result["path"]
+
+def download_media(message_id: str, chat_jid: str) -> Optional[str]:
+    """Download media from a message and return the local file path, or None on failure."""
+    try:
+        path = fetch_media(message_id, chat_jid)
+        log(f"Media downloaded successfully: {path}")
+        return path
+    except (ValueError, bridge.BridgeUnavailable) as e:
+        log(f"Download failed: {e}")
         return None
