@@ -34,6 +34,9 @@ This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lh
 
 You need [Go](https://go.dev/dl/) (the version in `whatsapp-bridge/go.mod`), [uv](https://docs.astral.sh/uv/) and Python 3.11+. Optional: [FFmpeg](https://ffmpeg.org) (images, video, voice notes), [poppler](https://poppler.freedesktop.org) (PDFs) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (voice note transcripts), see [Media](#media-photos-voice-notes-video-documents). Tested on macOS; Linux should work; Windows is untested.
 
+> [!IMPORTANT]
+> **Without whisper.cpp and a model, voice messages cannot be transcribed.** The model will only see that a voice note exists (sender, length), never what it says. Images and documents work without it. To enable transcripts, install whisper.cpp and download a model as shown in [Media → Setup](#media-photos-voice-notes-video-documents) (`brew install whisper-cpp` alone is not enough). If something is missing, the server says so in its log at startup and the model tells you when you ask about a voice note.
+
 **1. Clone and link your phone (once)**
 
 ```bash

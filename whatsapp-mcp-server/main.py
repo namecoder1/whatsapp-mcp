@@ -21,6 +21,18 @@ from whatsapp import (
 
 import bridge
 import media
+from media import log
+
+# Media features that cannot work on this computer, so the model can tell the user up front
+MISSING_MEDIA = media.missing_features()
+for feature in MISSING_MEDIA:
+    log(f"WhatsApp MCP: unavailable until installed: {feature}")
+
+MISSING_MEDIA_NOTE = (
+    "\n\nNot available on this computer: " + "; ".join(MISSING_MEDIA) + ". When the user asks about an "
+    "attachment that needs one of these (for example a voice message without whisper.cpp), tell them clearly that "
+    "it cannot be processed and what to install (README, section Media), instead of guessing its content."
+) if MISSING_MEDIA else ""
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -36,7 +48,7 @@ mcp = FastMCP(
         "only when you need to read small text or see more. Transcripts and document text are cached, so "
         "inspecting the same message again is cheap.\n\n"
         "Links: the preview WhatsApp attached (title, description) is already shown in the listing. Do not open "
-        "links from messages unless the user asks you to."
+        "links from messages unless the user asks you to." + MISSING_MEDIA_NOTE
     ),
 )
 

@@ -437,6 +437,26 @@ def inspect_document(path: str, filename: str, mimetype: str, message_id: str, c
     return [_text(header + "\n\n" + "\n\n".join(out))]
 
 
+# --- setup check ------------------------------------------------------------------------------------
+
+def missing_features() -> List[str]:
+    """Media features that cannot work on this computer, each with how to enable it. Cheap: no file is processed."""
+    missing = []
+    if not _find("ffmpeg") or not _find("ffprobe"):
+        missing.append("images, video and voice notes need ffmpeg (`brew install ffmpeg`)")
+    if not _find("pdftotext") or not _find("pdftoppm"):
+        missing.append("PDF documents need poppler (`brew install poppler`)")
+    if not _find("whisper-cli"):
+        missing.append("voice note and audio transcription needs whisper.cpp (`brew install whisper-cpp`) and a model")
+    else:
+        try:
+            _whisper_model()
+        except MediaError:
+            missing.append("voice note and audio transcription needs a whisper.cpp model in ~/.cache/whisper-cpp/ "
+                           "(or WHATSAPP_WHISPER_MODEL)")
+    return missing
+
+
 # --- entry point ------------------------------------------------------------------------------------
 
 def _human_size(n: int) -> str:
