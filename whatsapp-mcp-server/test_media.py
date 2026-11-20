@@ -52,6 +52,25 @@ class PathTest(unittest.TestCase):
             media.check_size({"file_length": int((media.MAX_MB + 1) * 1024 * 1024)})
 
 
+class FfmpegInputTest(unittest.TestCase):
+    def test_untrusted_input_is_restricted(self):
+        for kind in ("image", "sticker", "video", "audio", "media"):
+            args = media._input(kind, "/x/in.mp4")
+            self.assertEqual(args[args.index("-protocol_whitelist") + 1], "file")
+            formats = args[args.index("-format_whitelist") + 1].split(",")
+            self.assertFalse({"hls", "concat", "image2pipe", "tee"} & set(formats), kind)
+            self.assertEqual(args[-2:], ["-i", "/x/in.mp4"])
+
+    @unittest.skipUnless(media._find("ffprobe"), "ffprobe not installed")
+    def test_concat_script_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "secret.txt"), "w").write("secret")
+            evil = os.path.join(tmp, "evil.mp4")
+            open(evil, "w").write("ffconcat version 1.0\nfile secret.txt\n")
+            with self.assertRaises(media.MediaError):
+                media._probe(evil, "video")
+
+
 class OfficeTest(unittest.TestCase):
     def test_docx_text_and_entity_attacks(self):
         w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'

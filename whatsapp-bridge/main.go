@@ -597,6 +597,10 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	if directPath == "" {
 		directPath = extractDirectPathFromURL(url)
 	}
+	// The path comes from the sender's message and is appended to a WhatsApp media host
+	if !validDirectPath(directPath) {
+		return false, "", "", "", fmt.Errorf("invalid media path in message")
+	}
 
 	// Create a downloader that implements DownloadableMessage
 	var waMediaType whatsmeow.MediaType
@@ -647,6 +651,11 @@ func extractDirectPathFromURL(url string) string {
 		return url // Return original URL if parsing fails
 	}
 	return "/" + parts[1]
+}
+
+// A direct path must stay a path on the media host: no "//host", userinfo, backslashes or whitespace
+func validDirectPath(p string) bool {
+	return strings.HasPrefix(p, "/") && !strings.HasPrefix(p, "//") && !strings.ContainsAny(p, "@\\ \t\r\n")
 }
 
 // Start a REST API server to expose the WhatsApp client functionality

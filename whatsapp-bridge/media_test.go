@@ -93,3 +93,16 @@ func TestExtractDirectPathKeepsQuery(t *testing.T) {
 		t.Errorf("direct path = %q, want %q", got, want)
 	}
 }
+
+func TestValidDirectPath(t *testing.T) {
+	for _, ok := range []string{"/v/t62.7118-24/1_n.enc?ccb=11-4&oh=a&oe=b", "/o1/v/t24/f2/m1/x.enc"} {
+		if !validDirectPath(ok) {
+			t.Errorf("rejected %q", ok)
+		}
+	}
+	for _, bad := range []string{"", "v/x", "//evil.com/x", "/x@evil.com", "/x\\y", "/x y", "@evil.com/x"} {
+		if validDirectPath(bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}

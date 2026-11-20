@@ -86,15 +86,29 @@ def _run(cmd: List[str], timeout: float, cwd: Optional[str] = None) -> bytes:
     return result.stdout
 
 
+# Demuxers ffmpeg may use for each kind of input. Without this list, a crafted file can be detected as a
+# playlist or concat script (hls, concat...) and make ffmpeg read other local files into the output.
+FORMATS = {
+    "image": "image2,png_pipe,jpeg_pipe,webp_pipe,gif,gif_pipe",
+    "video": "mov,matroska,avi",
+    "audio": "ogg,mp3,wav,aac,flac,aiff,caf,amr,mov,matroska",
+}
+FORMATS["sticker"] = FORMATS["image"]
+FORMATS["media"] = FORMATS["video"] + "," + FORMATS["audio"]  # audio track of a video or an audio file
+
+
+def _input(kind: str, path: str) -> List[str]:
+    """Input options for an untrusted file: only local files and only the demuxers expected for kind."""
+    return ["-protocol_whitelist", "file", "-format_whitelist", FORMATS[kind], "-i", path]
+
+
 def _ffmpeg() -> List[str]:
-    # protocol_whitelist keeps crafted files (playlists, concat lists) from reaching the network or other files
-    return [_need("ffmpeg", "install it with `brew install ffmpeg`"),
-            "-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file,pipe"]
+    return [_need("ffmpeg", "install it with `brew install ffmpeg`"), "-nostdin", "-hide_banner", "-loglevel", "error"]
 
 
-def _probe(path: str) -> dict:
+def _probe(path: str, kind: str) -> dict:
     ffprobe = _need("ffprobe", "install ffmpeg with `brew install ffmpeg`")
-    out = _run([ffprobe, "-v", "error", "-protocol_whitelist", "file", "-show_entries",
+    out = _run([ffprobe, "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", FORMATS[kind], "-show_entries",
                 "format=duration:stream=codec_type,width,height", "-of", "json", path], timeout=30)
     try:
         info = json.loads(out or b"{}")
@@ -182,12 +196,12 @@ def _parse_pages(pages: Optional[str], total: int, default: int) -> Tuple[int, i
 def _scaled_jpeg(path: str, side: int) -> bytes:
     """Decode one frame of an image, shrink it to fit side x side and re-encode it as JPEG."""
     vf = f"scale='min(iw,{side})':'min(ih,{side})':force_original_aspect_ratio=decrease"
-    return _run(_ffmpeg() + ["-i", path, "-vf", vf, "-frames:v", "1", "-pix_fmt", "yuvj420p",
+    return _run(_ffmpeg() + _input("image", path) + ["-vf", vf, "-frames:v", "1", "-pix_fmt", "yuvj420p",
                              "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"], timeout=60)
 
 
 def inspect_image(path: str, detail: str, kind: str) -> list:
-    info = _probe(path)
+    info = _probe(path, kind)
     if info["width"] * info["height"] > 100_000_000:
         raise MediaError(f"This image is {info['width']}x{info['height']} pixels, too large to decode safely")
     try:
@@ -233,13 +247,13 @@ def transcribe(path: str, message_id: str, chat_jid: str) -> Tuple[str, bool]:
 
     whisper = _need("whisper-cli", "install whisper.cpp with `brew install whisper-cpp`")
     model = _whisper_model()
-    duration = _probe(path)["duration"]
+    duration = _probe(path, "media")["duration"]
     limit = TRANSCRIBE_MAX_MINUTES * 60
 
     with tempfile.TemporaryDirectory(dir=bridge.STORE_DIR) as tmp:
         wav = os.path.join(tmp, "audio.wav")
         # whisper.cpp wants 16 kHz mono PCM; long recordings are cut at the limit
-        _run(_ffmpeg() + ["-i", path, "-vn", "-ac", "1", "-ar", "16000", "-t", str(int(limit)),
+        _run(_ffmpeg() + _input("media", path) + ["-vn", "-ac", "1", "-ar", "16000", "-t", str(int(limit)),
                           "-c:a", "pcm_s16le", wav], timeout=120, cwd=tmp)
         out = _run([whisper, "-m", model, "-f", wav, "-l", WHISPER_LANGUAGE, "-nt", "-np"],
                    timeout=min(duration, limit) * 3 + 120, cwd=tmp)
@@ -263,7 +277,7 @@ def inspect_audio(path: str, message_id: str, chat_jid: str, voice: bool) -> lis
 # --- video ------------------------------------------------------------------------------------------
 
 def inspect_video(path: str, message_id: str, chat_jid: str, detail: str) -> list:
-    info = _probe(path)
+    info = _probe(path, "video")
     duration = info["duration"]
     count, cols, width = VIDEO_GRID[detail]
     rows = -(-count // cols)
@@ -272,7 +286,7 @@ def inspect_video(path: str, message_id: str, chat_jid: str, detail: str) -> lis
     if info["has_video"] and duration > 0:
         # One contact sheet with frames spread evenly over the video costs one image instead of many
         vf = f"fps={count}/{duration:.3f},scale={width}:-2,tile={cols}x{rows}"
-        sheet = _run(_ffmpeg() + ["-i", path, "-vf", vf, "-frames:v", "1", "-pix_fmt", "yuvj420p", "-q:v", "5",
+        sheet = _run(_ffmpeg() + _input("video", path) + ["-vf", vf, "-frames:v", "1", "-pix_fmt", "yuvj420p", "-q:v", "5",
                                   "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"], timeout=180)
         step = duration / count
         times = ", ".join(_seconds(int(step * (i + 0.5))) for i in range(count))
