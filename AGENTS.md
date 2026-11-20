@@ -19,6 +19,7 @@ Two processes that share `whatsapp-bridge/store/`:
   - `bridge.py`: on-demand bridge start. It builds `whatsapp-bridge/bin/whatsapp-bridge` if stale, spawns it with `WHATSAPP_NO_PAIRING=1`, `WHATSAPP_EXIT_WITH_PARENT=1` and a 15m idle timeout, logs to `store/bridge.log`, and stops it on exit. `call()` is the only way to reach the bridge API. Read-only tools also start the bridge on purpose, so they see messages that arrived while it was off. Bridge exit codes: 3 restricted, 4 not paired, 5 already running.
   - `whatsapp.py`: SQLite queries and bridge calls (`_post` goes through `bridge.call`, `_outbox_path` checks paths).
   - `media.py`: `inspect_media` processing. Images and video frames via ffmpeg, PDFs via poppler, `.docx`/`.pptx` via `defusedxml`, transcripts via whisper.cpp (`whisper-cli`). Results for audio and documents are cached in `store/media_cache.db`.
+  - `setup_media.py`: detects the machine (Apple Silicon, NVIDIA, RAM, cores), recommends a whisper.cpp model and thread count, and as a CLI downloads the model with a pinned SHA-256. Imported by `media.py` for recommendations only: the server never downloads models by itself.
   - `audio.py`: ffmpeg conversion to Opus for voice messages.
 
 ## Media design

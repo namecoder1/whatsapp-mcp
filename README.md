@@ -35,7 +35,7 @@ This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lh
 You need [Go](https://go.dev/dl/) (the version in `whatsapp-bridge/go.mod`), [uv](https://docs.astral.sh/uv/) and Python 3.11+. Optional: [FFmpeg](https://ffmpeg.org) (images, video, voice notes), [poppler](https://poppler.freedesktop.org) (PDFs) and [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (voice note transcripts), see [Media](#media-photos-voice-notes-video-documents). Tested on macOS; Linux should work; Windows is untested.
 
 > [!IMPORTANT]
-> **Without whisper.cpp and a model, voice messages cannot be transcribed.** The model will only see that a voice note exists (sender, length), never what it says. Images and documents work without it. To enable transcripts, install whisper.cpp and download a model as shown in [Media → Setup](#media-photos-voice-notes-video-documents) (`brew install whisper-cpp` alone is not enough). If something is missing, the server says so in its log at startup and the model tells you when you ask about a voice note.
+> **Without whisper.cpp and a model, voice messages cannot be transcribed.** The model will only see that a voice note exists (sender, length), never what it says. Images and documents work without it. To enable transcripts, install whisper.cpp and then run `uv run python setup_media.py` in `whatsapp-mcp-server/`: it picks the right model for your computer and downloads it (`brew install whisper-cpp` alone is not enough). See [Media → Setup](#media-photos-voice-notes-video-documents). If something is missing, the server says so in its log at startup and the model tells you when you ask about a voice note.
 
 **1. Clone and link your phone (once)**
 
@@ -146,13 +146,25 @@ Everything runs on your computer: no file is sent to a transcription or OCR serv
 ```bash
 brew install ffmpeg poppler whisper-cpp
 
-# A whisper.cpp model (~550 MB, good with Italian, English and most languages)
-mkdir -p ~/.cache/whisper-cpp
-curl -L -o ~/.cache/whisper-cpp/ggml-large-v3-turbo-q5_0.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin
+# Check what is installed, get the whisper model that fits this computer, download it after confirmation
+cd whatsapp-mcp-server
+uv run python setup_media.py
 ```
 
-Each part is optional: without whisper.cpp, images and documents still work, and the tool says what is missing. Models in `~/.cache/whisper-cpp/` are found automatically (the most accurate one wins); set `WHATSAPP_WHISPER_MODEL` to use another file. Smaller models (`ggml-base.bin`, `ggml-small.bin`) are faster but much less accurate outside English.
+`setup_media.py` looks at your computer and recommends the most accurate model that still transcribes a voice note in a few seconds:
+
+| Computer | Model | Size |
+| --- | --- | --- |
+| Apple Silicon Mac, 8 GB RAM or more | `turbo` (large-v3-turbo, q5_0) | 547 MB |
+| Apple Silicon Mac, less than 8 GB | `small` (q5_1) | 181 MB |
+| NVIDIA GPU, 16 GB RAM or more | `turbo-q8` (large-v3-turbo, q8_0) | 834 MB |
+| NVIDIA GPU, less RAM | `turbo` | 547 MB |
+| No GPU, 8+ cores and 16 GB RAM (Intel Mac, most Linux PCs) | `small` | 181 MB |
+| Anything smaller | `base` (q5_1) | 57 MB |
+
+Models are downloaded from the [whisper.cpp repository](https://huggingface.co/ggerganov/whisper.cpp) into `~/.cache/whisper-cpp/` and checked against pinned SHA-256 hashes. To choose yourself: `uv run python setup_media.py --model small` (`base`, `small`, `turbo`, `turbo-q8`); `--check` only reports. The server uses the recommended model if it is installed, otherwise the most accurate one it finds, or the file in `WHATSAPP_WHISPER_MODEL`. NVIDIA GPUs are only used if whisper.cpp was built with CUDA.
+
+Each part is optional: without whisper.cpp, images and documents still work, and the server says what is missing, with the right command for your computer.
 
 Captions, durations, sizes and link previews are recorded by the bridge for messages received from this version on. Older messages show only the media type and size.
 

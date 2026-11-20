@@ -5,7 +5,9 @@ import unittest
 import zipfile
 
 import media
+import setup_media
 import whatsapp
+from setup_media import Machine
 
 
 class PagesTest(unittest.TestCase):
@@ -86,6 +88,29 @@ class OfficeTest(unittest.TestCase):
                                                 f'<w:document {w}><w:p><w:t>&x;</w:t></w:p></w:document>')
             with self.assertRaises(Exception):
                 media._office_text(evil, ".docx")
+
+
+class RecommendTest(unittest.TestCase):
+    def test_model_fits_the_machine(self):
+        cases = [
+            (Machine("Darwin", True, False, 18, 5), "turbo"),
+            (Machine("Darwin", True, False, 8, 4), "turbo"),
+            (Machine("Linux", False, True, 32, 8), "turbo-q8"),
+            (Machine("Linux", False, True, 8, 4), "turbo"),
+            (Machine("Darwin", False, False, 16, 8), "small"),   # Intel Mac
+            (Machine("Linux", False, False, 8, 4), "base"),
+        ]
+        for machine, name in cases:
+            self.assertEqual(setup_media.recommend(machine).name, name, machine)
+
+    def test_threads(self):
+        self.assertEqual(setup_media.threads(Machine("Linux", False, False, 64, 32)), 8)
+        self.assertEqual(setup_media.threads(Machine("Linux", False, False, 4, 1)), 1)
+
+    def test_catalog(self):
+        for m in setup_media.MODELS.values():
+            self.assertRegex(m.sha256, r"^[0-9a-f]{64}$")
+            self.assertTrue(m.file.startswith("ggml-") and m.file.endswith(".bin"))
 
 
 class DescribeTest(unittest.TestCase):

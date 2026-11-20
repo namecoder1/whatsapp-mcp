@@ -9,7 +9,6 @@ import base64
 import glob
 import os
 import re
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -24,6 +23,7 @@ import defusedxml.ElementTree as ET
 from mcp.types import ImageContent, TextContent
 
 import bridge
+import setup_media
 
 log = partial(print, file=sys.stderr)
 
@@ -57,19 +57,15 @@ class MediaError(ValueError):
 
 # --- external tools ---------------------------------------------------------------------------------
 
-def _find(*names: str) -> Optional[str]:
-    """Find a command, also in the Homebrew folders that MCP clients often leave out of PATH."""
-    for name in names:
-        for candidate in (shutil.which(name), f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}"):
-            if candidate and os.access(candidate, os.X_OK):
-                return candidate
-    return None
+_find = setup_media.find_tool
+# Detected once: the recommended whisper model and thread count depend on this computer
+MACHINE = setup_media.detect()
 
 
-def _need(name: str, install: str) -> str:
+def _need(name: str, install: Optional[str] = None) -> str:
     path = _find(name)
     if not path:
-        raise MediaError(f"{name} is not installed: {install}")
+        raise MediaError(f"{name} is not installed: {install or setup_media.install_hint(name, MACHINE)}")
     return path
 
 
@@ -103,11 +99,11 @@ def _input(kind: str, path: str) -> List[str]:
 
 
 def _ffmpeg() -> List[str]:
-    return [_need("ffmpeg", "install it with `brew install ffmpeg`"), "-nostdin", "-hide_banner", "-loglevel", "error"]
+    return [_need("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error"]
 
 
 def _probe(path: str, kind: str) -> dict:
-    ffprobe = _need("ffprobe", "install ffmpeg with `brew install ffmpeg`")
+    ffprobe = _need("ffprobe", setup_media.install_hint("ffmpeg", MACHINE))
     out = _run([ffprobe, "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", FORMATS[kind], "-show_entries",
                 "format=duration:stream=codec_type,width,height", "-of", "json", path], timeout=30)
     try:
@@ -224,6 +220,10 @@ def _whisper_model() -> str:
         if not os.path.isfile(path):
             raise MediaError(f"WHATSAPP_WHISPER_MODEL points to {path}, which does not exist")
         return path
+    # The model recommended for this computer wins when installed, then the most accurate one
+    recommended = os.path.join(setup_media.MODEL_DIR, setup_media.recommend(MACHINE).file)
+    if os.path.isfile(recommended):
+        return recommended
     found = []
     for folder in ("~/.cache/whisper-cpp", "~/.cache/whisper.cpp", "/opt/homebrew/share/whisper-cpp", "/usr/local/share/whisper-cpp"):
         found += glob.glob(os.path.join(os.path.expanduser(folder), "ggml-*.bin"))
@@ -232,11 +232,14 @@ def _whisper_model() -> str:
         for path in sorted(found):
             if name in os.path.basename(path) and "for-tests" not in path:
                 return path
-    raise MediaError(
-        "No whisper.cpp model found. Download one, for example:\n"
-        "  mkdir -p ~/.cache/whisper-cpp && curl -L -o ~/.cache/whisper-cpp/ggml-large-v3-turbo-q5_0.bin "
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin\n"
-        "or set WHATSAPP_WHISPER_MODEL to the path of a ggml model")
+    raise MediaError(_no_model_message())
+
+
+def _no_model_message() -> str:
+    model = setup_media.recommend(MACHINE)
+    return (f"no whisper.cpp model is installed. For this computer ({MACHINE.describe()}) the recommended model is "
+            f"{model.name} ({model.size / 2**20:.0f} MB, {model.note}). Install it with: {setup_media.setup_command()} "
+            "(or set WHATSAPP_WHISPER_MODEL to the path of a ggml model)")
 
 
 def transcribe(path: str, message_id: str, chat_jid: str) -> Tuple[str, bool]:
@@ -245,7 +248,7 @@ def transcribe(path: str, message_id: str, chat_jid: str) -> Tuple[str, bool]:
     if cached is not None:
         return cached, True
 
-    whisper = _need("whisper-cli", "install whisper.cpp with `brew install whisper-cpp`")
+    whisper = _need("whisper-cli")
     model = _whisper_model()
     duration = _probe(path, "media")["duration"]
     limit = TRANSCRIBE_MAX_MINUTES * 60
@@ -255,7 +258,8 @@ def transcribe(path: str, message_id: str, chat_jid: str) -> Tuple[str, bool]:
         # whisper.cpp wants 16 kHz mono PCM; long recordings are cut at the limit
         _run(_ffmpeg() + _input("media", path) + ["-vn", "-ac", "1", "-ar", "16000", "-t", str(int(limit)),
                           "-c:a", "pcm_s16le", wav], timeout=120, cwd=tmp)
-        out = _run([whisper, "-m", model, "-f", wav, "-l", WHISPER_LANGUAGE, "-nt", "-np"],
+        out = _run([whisper, "-m", model, "-f", wav, "-l", WHISPER_LANGUAGE, "-t", str(setup_media.threads(MACHINE)),
+                    "-nt", "-np"],
                    timeout=min(duration, limit) * 3 + 120, cwd=tmp)
 
     text = " ".join(line.strip() for line in out.decode("utf-8", "replace").splitlines() if line.strip())
@@ -365,7 +369,7 @@ def _document_pages(path: str, filename: str, mimetype: str, message_id: str, ch
     text = _cached(message_id, chat_jid, "text")
     if text is None:
         if is_pdf:
-            pdftotext = _need("pdftotext", "install poppler with `brew install poppler`")
+            pdftotext = _need("pdftotext")
             text = _run([pdftotext, "-enc", "UTF-8", "-l", "500", path, "-"], timeout=120).decode("utf-8", "replace")
         elif ext in (".docx", ".pptx"):
             text = _office_text(path, ext)
@@ -401,7 +405,7 @@ def _chunks(text: str, size: int) -> List[str]:
 
 def _render_pdf_pages(path: str, first: int, last: int, detail: str) -> List[bytes]:
     """Render PDF pages as JPEG images, for scanned documents without a text layer."""
-    pdftoppm = _need("pdftoppm", "install poppler with `brew install poppler`")
+    pdftoppm = _need("pdftoppm", setup_media.install_hint("pdftotext", MACHINE))
     images = []
     with tempfile.TemporaryDirectory(dir=bridge.STORE_DIR) as tmp:
         _run([pdftoppm, "-jpeg", "-r", "150", "-scale-to", str(IMAGE_SIDE[detail]), "-f", str(first), "-l", str(last),
@@ -455,19 +459,22 @@ def inspect_document(path: str, filename: str, mimetype: str, message_id: str, c
 
 def missing_features() -> List[str]:
     """Media features that cannot work on this computer, each with how to enable it. Cheap: no file is processed."""
+    hint = partial(setup_media.install_hint, machine=MACHINE)
     missing = []
     if not _find("ffmpeg") or not _find("ffprobe"):
-        missing.append("images, video and voice notes need ffmpeg (`brew install ffmpeg`)")
+        missing.append(f"images, video and voice notes need ffmpeg (`{hint('ffmpeg')}`)")
     if not _find("pdftotext") or not _find("pdftoppm"):
-        missing.append("PDF documents need poppler (`brew install poppler`)")
+        missing.append(f"PDF documents need poppler (`{hint('pdftotext')}`)")
+    try:
+        _whisper_model()
+        has_model = True
+    except MediaError:
+        has_model = False
     if not _find("whisper-cli"):
-        missing.append("voice note and audio transcription needs whisper.cpp (`brew install whisper-cpp`) and a model")
-    else:
-        try:
-            _whisper_model()
-        except MediaError:
-            missing.append("voice note and audio transcription needs a whisper.cpp model in ~/.cache/whisper-cpp/ "
-                           "(or WHATSAPP_WHISPER_MODEL)")
+        need_model = "" if has_model else f", then a model: {setup_media.setup_command()}"
+        missing.append(f"voice note and audio transcription needs whisper.cpp (`{hint('whisper-cli')}`){need_model}")
+    elif not has_model:
+        missing.append(f"voice note and audio transcription: {_no_model_message()}")
     return missing
 
 
