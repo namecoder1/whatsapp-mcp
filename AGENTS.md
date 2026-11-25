@@ -42,7 +42,7 @@ Run the bridge with `go run .`, not `go run main.go`: the package has several fi
 
 ## Bridge lifecycle
 
-Normally the bridge is not started by hand: the MCP server starts it when a WhatsApp tool is first used. Pairing (QR code) is the only step that needs a terminal: `cd whatsapp-bridge && go run .`. An on-demand start must never show a QR code, and the bridge's stdout/stderr must never be inherited by the MCP server (its stdout is the protocol channel).
+To keep it running 24/7 on macOS, `whatsapp-bridge/service.sh install` sets up a LaunchAgent (no idle timeout, starts at login, restarts after crashes but never after exit 3 or 4); the MCP server then reuses it through the socket. After changing Go sources run `./service.sh restart`. Without the agent, the bridge is not started by hand: the MCP server starts it when a WhatsApp tool is first used. Pairing (QR code) is the only step that needs a terminal: `cd whatsapp-bridge && go run .`. An on-demand start must never show a QR code, and the bridge's stdout/stderr must never be inherited by the MCP server (its stdout is the protocol channel).
 
 ## Security invariants (do not weaken)
 
