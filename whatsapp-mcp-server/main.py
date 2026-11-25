@@ -17,6 +17,9 @@ from whatsapp import (
     download_media as whatsapp_download_media,
     fetch_media as whatsapp_fetch_media,
     get_media_info as whatsapp_get_media_info,
+    Chat,
+    Contact,
+    MessageContext,
 )
 
 import bridge
@@ -74,7 +77,7 @@ def send_tool(fn):
     return tool(fn) if ALLOW_SEND else fn
 
 @tool
-def search_contacts(query: str) -> List[Dict[str, Any]]:
+def search_contacts(query: str) -> List[Contact]:
     """Search WhatsApp contacts by name or phone number.
     
     Args:
@@ -95,7 +98,7 @@ def list_messages(
     include_context: bool = True,
     context_before: int = 1,
     context_after: int = 1
-) -> List[Dict[str, Any]]:
+) -> str:
     """Get WhatsApp messages matching specified criteria with optional context.
 
     Attachments appear as a summary like [voice message 0:42 ...] or [document "x.pdf" 14 pages ...] with the
@@ -134,7 +137,7 @@ def list_chats(
     page: int = 0,
     include_last_message: bool = True,
     sort_by: str = "last_active"
-) -> List[Dict[str, Any]]:
+) -> List[Chat]:
     """Get WhatsApp chats matching specified criteria.
     
     Args:
@@ -154,7 +157,7 @@ def list_chats(
     return chats
 
 @tool
-def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]:
+def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]:
     """Get WhatsApp chat metadata by JID.
     
     Args:
@@ -165,7 +168,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]
     return chat
 
 @tool
-def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
+def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
     """Get WhatsApp chat metadata by sender phone number.
     
     Args:
@@ -175,7 +178,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     return chat
 
 @tool
-def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str, Any]]:
+def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
     """Get all WhatsApp chats involving the contact.
     
     Args:
@@ -187,7 +190,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str
     return chats
 
 @tool
-def get_last_interaction(jid: str) -> str:
+def get_last_interaction(jid: str) -> Optional[str]:
     """Get most recent WhatsApp message involving the contact.
     
     Args:
@@ -201,7 +204,7 @@ def get_message_context(
     message_id: str,
     before: int = 5,
     after: int = 5
-) -> Dict[str, Any]:
+) -> MessageContext:
     """Get context around a specific WhatsApp message.
     
     Args:
