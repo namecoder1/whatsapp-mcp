@@ -6,3 +6,4 @@ whatsapp-bridge/store/
 *.db-wal
 *.db-shm
 whatsapp-bridge/bin/
+*.log
