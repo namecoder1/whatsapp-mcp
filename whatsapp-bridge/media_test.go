@@ -72,7 +72,7 @@ func TestMigrateMessageColumns(t *testing.T) {
 		}
 	}
 	store := &MessageStore{db: db}
-	err = store.StoreMessage("id1", "chat", "me", "caption", time.Unix(1700000000, 0), false,
+	err = store.StoreMessage("id1", "chat", "me", "", "caption", time.Unix(1700000000, 0), false,
 		MediaInfo{Type: "video", Filename: "v.mp4", Seconds: 90, Width: 1280, Height: 720}, LinkPreview{})
 	if err != nil {
 		t.Fatal(err)

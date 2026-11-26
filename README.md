@@ -22,10 +22,12 @@ This is a security-focused fork of [lharries/whatsapp-mcp](https://github.com/lh
 
 ## Features
 
-- Search contacts and list chats with their last message
-- Read messages with filters, pagination and surrounding context
+- Find chats by name (accents and case ignored), phone number or JID; see what's new and which chats wait for your reply
+- Read a conversation as a compact transcript, with time ranges like `today`, `3d` or `2026-11-20`
+- Fast full-text search over messages, file names, and the text of documents and voice notes already opened
 - Let the model see photos, read documents and listen to voice notes, one attachment at a time and only when it needs to (see [Media](#media-photos-voice-notes-video-documents))
-- Download images, videos, documents and voice notes on demand
+- Documents and voice notes are downloaded as they arrive, before WhatsApp deletes them; older files are requested again from the sender's phone
+- Save any attachment to `~/Downloads/WhatsApp`
 - Everything stored locally; no third-party server in the path
 - Optional, rate-limited sending of text, files and voice messages
 - The bridge starts on demand and stops when your session ends
@@ -104,16 +106,24 @@ Read-only tools (always available):
 
 | Tool | What it does |
 | --- | --- |
-| `search_contacts` | Find contacts by name or phone number |
-| `list_chats` | List chats with metadata and last message |
-| `get_chat` | Details for one chat |
-| `get_direct_chat_by_contact` | Find the 1:1 chat with a phone number |
-| `get_contact_chats` | All chats involving a contact |
-| `get_last_interaction` | Most recent message with a contact |
-| `list_messages` | Messages with filters, pagination and context |
+| `recent_activity` | What's new: chats with messages since a time (default 24h), and which ones wait for your reply |
+| `list_chats` | List chats by last activity, or find one by name, phone number or JID |
+| `read_chat` | One conversation as a compact transcript, with an optional time range |
+| `search_messages` | Full-text search (case and accents ignored, prefix match, `"exact phrases"`), also in documents and voice notes already opened |
+| `list_attachments` | Attachments by chat, kind, file name or date, and whether each can be opened right away |
 | `get_message_context` | Messages around a specific message |
 | `inspect_media` | See an image, read a document, or get a transcript of a voice note or video, for one message |
-| `download_media` | Download media from a message to local disk |
+| `download_media` | Save an attachment to `~/Downloads/WhatsApp` (`WHATSAPP_DOWNLOAD_DIR`) |
+
+Wherever a tool takes a `chat`, you can pass a contact or group name (or part of it), a phone number or a JID. If several chats match, the tool lists them and asks for the JID. Times accept `today`, `yesterday`, `3d`, `12h`, `2w` or a date such as `2026-11-20`. Listings print one line per message, grouped by day:
+
+```
+Chat: Marco Rossi (393331234567@s.whatsapp.net, direct) — messages 1-3 of 3 counting back from the newest
+── Wed 25 Nov 2026 ──
+18:01 Marco Rossi: Ti mando la fattura di novembre
+18:02 Marco Rossi: [document "Fattura_11.pdf" 3 pages application/pdf 117.2 KB · id 3EB0...]
+18:05 Me: grazie!
+```
 
 Sending tools (only registered when `WHATSAPP_ALLOW_SEND=1`): `send_message`, `send_file`, `send_audio_message`.
 
@@ -122,9 +132,9 @@ Sending tools (only registered when `WHATSAPP_ALLOW_SEND=1`): `send_message`, `s
 Message listings never include media content. Each attachment is shown as a one-line summary, followed by its caption:
 
 ```
-[voice message 0:42 18.2 KB - Message ID: 3A2E... - Chat JID: ...]
-[document "contract.pdf" 14 pages application/pdf 1.2 MB - Message ID: ...] Here is the draft
-[image 1280x960 168.7 KB - Message ID: ...] look at this
+[voice message 0:42 18.2 KB · id 3A2E...]
+[document "contract.pdf" 14 pages application/pdf 1.2 MB · id ...] Here is the draft
+[image 1280x960 168.7 KB · id ...] look at this
 see this https://example.com [link preview: https://example.com — "Example Domain": ...]
 ```
 
@@ -137,7 +147,7 @@ What `inspect_media` returns:
 | Image, sticker | The picture, shrunk to 768px | 1568px, to read small text |
 | Voice message, audio | A transcript, made locally with whisper.cpp | (same) |
 | Video | One contact sheet of 4 frames, plus a transcript of the audio | 9 larger frames |
-| Document | The text of PDF, `.docx`, `.pptx` and plain text files, a few pages per call (`pages="6-10"` to continue). Scanned PDFs are shown as page images | More text per call |
+| Document | The text of PDF, Word (`.docx`, `.doc`), PowerPoint (`.pptx`), Excel (`.xlsx`), OpenDocument (`.odt`, `.ods`, `.odp`), `.rtf` and plain text files, a few pages, slides or sheets per call (`pages="6-10"` to continue). Scanned PDFs are shown as page images. `.doc` and `.rtf` need macOS (`textutil`) | More text per call |
 
 Everything runs on your computer: no file is sent to a transcription or OCR service. Transcripts and document text are cached in `store/media_cache.db`, so a second question about the same voice note costs nothing. Link previews are the ones WhatsApp attached to the message; links are never fetched by the server.
 
@@ -167,6 +177,15 @@ Models are downloaded from the [whisper.cpp repository](https://huggingface.co/g
 Each part is optional: without whisper.cpp, images and documents still work, and the server says what is missing, with the right command for your computer.
 
 Captions, durations, sizes and link previews are recorded by the bridge for messages received from this version on. Older messages show only the media type and size.
+
+### Expired media, automatic downloads and cleanup
+
+WhatsApp keeps attachments on its servers for only about 2-3 weeks. To keep them readable:
+
+- **Automatic download.** While the bridge runs, documents and voice notes up to 25 MB are downloaded as they arrive (and, at startup, those from the last 14 days). Nothing is opened or parsed until the model asks. Set `WHATSAPP_AUTO_DOWNLOAD` to choose the kinds (`document,voice,audio,image,video,sticker` or `none`). This works best with the bridge running 24/7 (`./service.sh install`).
+- **Asking the phone again.** When you open an attachment that already expired, the bridge asks the sender's phone to upload it again, as the WhatsApp app does. That works if their phone is online and still has the file. Otherwise the tool says why it failed and suggests asking for the file again. At most 20 such requests per hour.
+- **Cleanup.** `store/media/` is a cache. Files unused for 30 days are deleted (`WHATSAPP_MEDIA_RETENTION`), and the oldest ones go first when the folder grows past 500 MB (`WHATSAPP_MEDIA_MAX_TOTAL_MB`). Document text and transcripts stay in the cache, so a document you read once can still be read after its file is gone. The same file forwarded to several chats is stored once (hard links).
+- **No compression.** Measured on real chats, PDFs shrink by about 15%, JPEG by 6%, and voice notes, videos and ZIPs not at all, while every reader would need a decompressed copy. Space is saved with the limits above instead.
 
 ## Sending messages (opt-in)
 
@@ -206,6 +225,13 @@ All settings are environment variables. Set them in the `env` of your MCP config
 | `WHATSAPP_AUTOSTART` | on | Set to `0` to start and stop the bridge yourself |
 | `WHATSAPP_IDLE_TIMEOUT` | `15m` | Stop the bridge after this long without requests (`0` disables) |
 | `WHATSAPP_MEDIA_MAX_MB` | `100` | `inspect_media` refuses larger attachments |
+| `WHATSAPP_AUTO_DOWNLOAD` | `document,voice` | Attachment kinds the bridge downloads as they arrive (`document`, `voice`, `audio`, `image`, `video`, `sticker`, or `none`) |
+| `WHATSAPP_AUTO_DOWNLOAD_MAX_MB` | `25` | Larger attachments are never downloaded automatically |
+| `WHATSAPP_MEDIA_RETENTION` | `30d` | Downloaded files unused for this long are deleted (`12h`, `30d`, `0` keeps them) |
+| `WHATSAPP_MEDIA_MAX_TOTAL_MB` | `500` | Least recently used files are deleted when `store/media/` grows past this (`0`: no limit) |
+| `WHATSAPP_DOWNLOAD_DIR` | `~/Downloads/WhatsApp` | Where `download_media` saves files |
+
+The auto-download and cleanup settings belong to the bridge. When the MCP server starts the bridge, it passes them on. The always-on LaunchAgent (`service.sh`) does not see your MCP config: put them in `whatsapp-bridge/store/bridge.env`, one `NAME=value` per line, then run `./service.sh restart`.
 | `WHATSAPP_WHISPER_MODEL` | auto | Path of the whisper.cpp model (`ggml-*.bin`) used for transcripts |
 | `WHATSAPP_WHISPER_LANGUAGE` | `auto` | Language of voice notes (`it`, `en`...), if auto-detection gets it wrong |
 | `WHATSAPP_TRANSCRIBE_MAX_MINUTES` | `10` | Only the first part of longer recordings is transcribed |
@@ -224,12 +250,13 @@ The original project exposed a local HTTP API with no authentication and read an
 - **Media is processed locally and treated as hostile.** Parsers (ffmpeg, poppler, whisper.cpp) run as separate processes with timeouts and no network access, sizes are capped, and every result is labelled as untrusted content for the model.
 - **Media downloads work again.** Upstream stripped the signed query string from media paths, so downloads failed with HTTP 403.
 - **Logs go to stderr** (stdout is the MCP channel) and `whatsmeow` is updated to a current version.
+- **No message text in logs.** `bridge.log` records events, never message content or contact names.
 
 The invariants these rely on are written down in [AGENTS.md](./AGENTS.md).
 
 ## Privacy and data
 
-- Messages, the session, downloaded media, the media cache (transcripts and document text) and the API token live in `whatsapp-bridge/store/`. Treat that folder like a password: whoever can read it can read your chats and use your linked session.
+- Messages, the session, downloaded media, the media cache (transcripts and document text), the search index (`search.db`) and the API token live in `whatsapp-bridge/store/`. Treat that folder like a password: whoever can read it can read your chats and use your linked session.
 - Nothing is uploaded anywhere by this project. Transcription, document reading and image resizing run on your computer. Data reaches a model only when a tool returns it, and then it is subject to your MCP client's and model provider's policies.
 - To remove everything: unlink the device in WhatsApp (*Settings → Linked devices*) and delete `whatsapp-bridge/store/`.
 
@@ -239,7 +266,7 @@ The invariants these rely on are written down in [AGENTS.md](./AGENTS.md).
 - **Sessions expire.** Linked devices are logged out after roughly two weeks if your phone stays offline. Pair again.
 - **"Account restricted" / the bridge will not start.** WhatsApp restricted the account. Read the reason in `bridge.log`, wait it out, then delete `store/ACCOUNT_RESTRICTED` yourself.
 - **Codex: the server times out at startup or on the first call.** Raise `startup_timeout_sec` and `tool_timeout_sec` in `~/.codex/config.toml` (see [Quick start](#quick-start)), or build the bridge ahead of time with `go build -o bin/whatsapp-bridge .` in `whatsapp-bridge/`.
-- **`inspect_media` fails with HTTP 403/404/410.** WhatsApp deletes media from its servers after a while; old attachments can only be opened if they were downloaded before.
+- **An old attachment cannot be opened.** WhatsApp deleted it from its servers and the sender's phone did not upload it again (offline, or the file is gone from their phone). The error says which; try later, or ask for the file again. See [Expired media](#expired-media-automatic-downloads-and-cleanup).
 - **Wrong language in transcripts.** Set `WHATSAPP_WHISPER_LANGUAGE` (for example `it`), or use a larger model.
 - **No messages after pairing.** The first history sync can take several minutes on large accounts.
 - **Out of sync.** Stop the bridge, delete `store/messages.db` and `store/whatsapp.db`, and pair again.

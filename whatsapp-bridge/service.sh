@@ -59,6 +59,8 @@ run)
 	# Called by launchd. No idle timeout, no exit-with-parent, never a QR code.
 	cd "$DIR"
 	mkdir -p store && chmod 700 store
+	# Optional bridge settings (WHATSAPP_AUTO_DOWNLOAD=..., WHATSAPP_MEDIA_RETENTION=..., one per line)
+	if [ -f store/bridge.env ]; then set -a; . ./store/bridge.env; set +a; fi
 	unset WHATSAPP_IDLE_TIMEOUT WHATSAPP_EXIT_WITH_PARENT
 	code=0
 	WHATSAPP_NO_PAIRING=1 ./bin/whatsapp-bridge </dev/null >>store/bridge.log 2>&1 || code=$?

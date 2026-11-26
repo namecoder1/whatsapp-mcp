@@ -50,6 +50,7 @@ var mediaColumns = []struct{ name, kind string }{
 	{"link_url", "TEXT"},
 	{"link_title", "TEXT"},
 	{"link_description", "TEXT"},
+	{"sender_jid", "TEXT"},
 }
 
 // Add the media and link preview columns to a messages table created by an older version
